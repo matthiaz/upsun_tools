@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # usage: bash show_container_distribution.sh $PROJECT_ID $ENV
 
 CMD="platform"

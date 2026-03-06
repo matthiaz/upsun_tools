@@ -37,6 +37,8 @@ fi
 ENV="${2:-main}"
 sum_cpu=0
 sum_mem=0
+skipped_services=()
+
 
 echo "PROJECT_ID = $PROJECT_ID"
 echo "ENV = $ENV"
@@ -49,6 +51,7 @@ $CMD auth:info >/dev/null 2>&1 || {
 
 $CMD e:info -e "$ENV" -p $PROJECT_ID >/dev/null 2>&1 || {
     echo "ERROR: Selected environment '$ENV' does not exist, please enter the environment name as second parameter."
+    echo "$CMD e:info -e "$ENV" -p $PROJECT_ID"
     $CMD e:list -p $PROJECT_ID --no-inactive
     exit 1
 }
@@ -58,18 +61,26 @@ printf "\e[4;38;2;96;70;255m%-35s %10s %10s %10s %10s %10s\e[0m\n" \
   "Service" "CPU" "Mem(MB)" "CPU (%)" "Mem (%)" "Disk (%)"
 
 echo ""
-for service in $($CMD mem --columns service -1 --format csv --no-header -p $PROJECT_ID -e $ENV); do
+for service in $($CMD e:metadata -p $PROJECT_ID -e $ENV sizing | grep -F ': {' | cut -d':' -f1 | xargs); do
+    if [ "$service" = "router" ]; then
+        continue
+    fi
 
-    cpu=$($CMD cpu --columns limit,percent --service=$service -1 --format csv --no-header -p $PROJECT_ID -e $ENV | tr -d '\n')
+    # Skip services that exist in metadata but not in the actual environment
+    cpu=$($CMD cpu --columns limit,percent --service=$service -1 --format csv --no-header -p $PROJECT_ID -e $ENV 2>/dev/null | tr -d '\n')
+    if [ -z "$cpu" ]; then
+        skipped_services+=("$service")
+        continue
+    fi
     cpu_limit=$(echo "$cpu" | cut -d, -f1)
     cpu_usage=$(echo "$cpu" | cut -d, -f2)
 
-    mem=$($CMD mem --columns limit,percent --service=$service -1 --format csv --no-header --bytes -p $PROJECT_ID -e $ENV | tr -d '\n')
+    mem=$($CMD mem --columns limit,percent --service=$service -1 --format csv --no-header --bytes -p $PROJECT_ID -e $ENV 2>/dev/null | tr -d '\n')
     mem_limit=$(echo "$mem" | cut -d, -f1)
     mem_usage=$(echo "$mem" | cut -d, -f2)
     mem_limit=$((mem_limit / 1024 / 1024))
 
-    disk_percent=$($CMD disk --columns percent --service=$service -1 --format csv --no-header --bytes -p $PROJECT_ID -e $ENV | tr -d '\n')
+    disk_percent=$($CMD disk --columns percent --service=$service -1 --format csv --no-header --bytes -p $PROJECT_ID -e $ENV 2>/dev/null | tr -d '\n')
 
     sum_cpu=$(awk "BEGIN{print $cpu_limit + $sum_cpu}")
     sum_mem=$((mem_limit + sum_mem))
@@ -92,5 +103,11 @@ echo " "
 echo "Plan:"
 $CMD project:info subscription -p $PROJECT_ID | grep -e 'plan:' -e production | sed -e 's/medium/max_cpu: 2.09, max_memory: 3072/g'
 
-
+if [ ${#skipped_services[@]} -gt 0 ]; then
+    echo ""
+    echo "Skipped services (in metadata but not found in environment):"
+    for s in "${skipped_services[@]}"; do
+        echo "  - $s"
+    done
+fi
 
